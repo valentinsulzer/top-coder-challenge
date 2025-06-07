@@ -2,6 +2,7 @@ import lightgbm as lgb
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 import xgboost as xgb
 import numpy as np
+from human_loop_model import HumanLoopModel
 
 
 class EnsembleModel:
@@ -94,10 +95,15 @@ def get_ensemble_model():
     return EnsembleModel()
 
 
+def get_human_loop_model():
+    return HumanLoopModel()
+
+
 MODEL_CONFIGS = {
     "lightgbm": {"model": get_lgbm_model, "name": "LightGBM"},
     "random_forest": {"model": get_rf_model, "name": "Random Forest"},
     "xgboost": {"model": get_xgb_model, "name": "XGBoost"},
     "extra_trees": {"model": get_et_model, "name": "Extra Trees"},
     "ensemble": {"model": get_ensemble_model, "name": "Ensemble"},
+    "human_loop": {"model": get_human_loop_model, "name": "Human-in-the-Loop"},
 }

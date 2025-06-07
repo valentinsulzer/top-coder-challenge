@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
+import os
+from human_model import output_model
 
 
 FEATURES = [
+    "human_model_output",
     "trip_duration_days",
     "miles_traveled",
     "total_receipts_amount",
@@ -34,6 +37,21 @@ FEATURES = [
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df_eng = df.copy()
+
+    # Add human model output as a feature if parameters are available
+    params_path = "human_model_params.npy"
+    if os.path.exists(params_path):
+        human_params = np.load(params_path)
+        df_eng["human_model_output"] = output_model(
+            human_params,
+            df_eng["miles_traveled"],
+            df_eng["total_receipts_amount"],
+            df_eng["trip_duration_days"],
+        )
+    else:
+        # If the parameters don't exist, fill the column with zeros
+        df_eng["human_model_output"] = 0
+
     duration_safe = df_eng["trip_duration_days"].replace(0, 1)
     df_eng["miles_per_day"] = df_eng["miles_traveled"] / duration_safe
     df_eng["receipts_per_day"] = df_eng["total_receipts_amount"] / duration_safe

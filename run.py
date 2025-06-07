@@ -16,7 +16,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=MODEL_CONFIGS.keys(),
+        choices=list(MODEL_CONFIGS.keys()),
         default="lightgbm",
         help="The model to run.",
     )

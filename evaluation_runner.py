@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-from decimal import Decimal
 import matplotlib.pyplot as plt
 import seaborn as sns
 from common_utils import engineer_features
@@ -67,24 +66,22 @@ def run_evaluation(model, model_name, feature_cols):
     print()
 
     # Metrics Calculation
-    print("📝 Calculating metrics using Decimal for precision...")
-    expected_dec = df_eval["expected_output"].apply(lambda x: Decimal(str(x)))
-    predicted_dec = df_eval["predicted_output"].apply(lambda x: Decimal(str(x)))
-    error_dec = (predicted_dec - expected_dec).abs()
+    print("📝 Calculating metrics...")
+    error = df_eval["error"]
 
     num_cases = len(df_eval)
     successful_runs = len(df_eval)
-    exact_matches = (error_dec < Decimal("0.01")).sum()
-    close_matches = (error_dec < Decimal("1.00")).sum()
-    total_error = error_dec.sum()
-    max_error = error_dec.max()
+    exact_matches = (error < 0.01).sum()
+    close_matches = (error < 1.00).sum()
+    total_error = error.sum()
+    max_error = error.max()
 
     if successful_runs == 0:
         print("❌ No successful test cases!")
     else:
         avg_error = total_error / successful_runs
-        exact_pct = (Decimal(int(exact_matches)) / successful_runs) * 100
-        close_pct = (Decimal(int(close_matches)) / successful_runs) * 100
+        exact_pct = (exact_matches / successful_runs) * 100
+        close_pct = (close_matches / successful_runs) * 100
         print("✅ Evaluation Complete!")
         print(f"\n📈 Results Summary ({model_name}):")
         print(f"  Total test cases: {num_cases}")
@@ -98,32 +95,24 @@ def run_evaluation(model, model_name, feature_cols):
         print("\n📊 Generating evaluation visualizations...")
         results_df = pd.DataFrame(
             {
-                "expected": expected_dec,
-                "actual": predicted_dec,
-                "error": error_dec,
+                "expected": df_eval["expected_output"],
+                "actual": df_eval["predicted_output"],
+                "error": error,
                 "case_num": df_eval.index + 1,
                 "trip_duration": df_eval["trip_duration_days"],
                 "miles_traveled": df_eval["miles_traveled"],
                 "receipts_amount": df_eval["total_receipts_amount"],
             }
         )
-        results_df_float = results_df.copy()
-        results_df_float["expected"] = results_df_float["expected"].astype(float)
-        results_df_float["actual"] = results_df_float["actual"].astype(float)
-        results_df_float["error"] = results_df_float["error"].astype(float)
 
         # Scatter plot
         plt.figure(figsize=(10, 6))
-        sns.scatterplot(x="expected", y="actual", data=results_df_float, alpha=0.5)
+        sns.scatterplot(x="expected", y="actual", data=results_df, alpha=0.5)
         plt.title(f"Expected vs. Actual Reimbursement ({model_name})")
         plt.xlabel("Expected Reimbursement ($)")
         plt.ylabel("Actual Reimbursement ($)")
-        max_val = max(
-            results_df_float["expected"].max(), results_df_float["actual"].max()
-        )
-        min_val = min(
-            results_df_float["expected"].min(), results_df_float["actual"].min()
-        )
+        max_val = max(results_df["expected"].max(), results_df["actual"].max())
+        min_val = min(results_df["expected"].min(), results_df["actual"].min())
         plt.plot(
             [min_val, max_val],
             [min_val, max_val],
@@ -140,7 +129,7 @@ def run_evaluation(model, model_name, feature_cols):
 
         # Error distribution
         plt.figure(figsize=(10, 6))
-        sns.histplot(results_df_float["error"], bins=50, kde=True)
+        sns.histplot(results_df["error"], bins=50, kde=True)
         plt.title(f"Distribution of Prediction Errors ({model_name})")
         plt.xlabel("Absolute Prediction Error ($)")
         plt.ylabel("Frequency")
@@ -155,5 +144,5 @@ def run_evaluation(model, model_name, feature_cols):
         worst_predictions = results_df.sort_values("error", ascending=False).head(10)
         print(worst_predictions.to_string())
 
-        score = avg_error * 100 + (num_cases - exact_matches) * Decimal("0.1")
+        score = avg_error * 100 + (num_cases - exact_matches) * 0.1
         print(f"\n🎯 Your Score: {score:.2f} (lower is better)")
