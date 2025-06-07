@@ -4,6 +4,9 @@ import lightgbm as lgb
 import sys
 import os
 from decimal import Decimal
+import optuna
+from sklearn.model_selection import train_test_split, KFold
+from sklearn.metrics import mean_absolute_error
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,23 +57,47 @@ class ReimbursementModel:
 
     def fit(self, X, y):
         self.feature_names = X.columns.tolist()
-        params = {
-            "objective": "regression_l1",
-            "metric": "mae",
-            "n_estimators": 2000,
-            "learning_rate": 0.01,
-            "feature_fraction": 0.8,
-            "bagging_fraction": 0.8,
-            "bagging_freq": 1,
-            "lambda_l1": 0.1,
-            "lambda_l2": 0.1,
-            "num_leaves": 31,
-            "verbose": -1,
-            "n_jobs": -1,
-            "seed": 42,
-            "boosting_type": "gbdt",
-        }
-        self.model = lgb.LGBMRegressor(**params)
+
+        def objective(trial):
+            params = {
+                "objective": "regression_l1",
+                "metric": "mae",
+                "n_estimators": trial.suggest_int("n_estimators", 1000, 4000),
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.03),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+                "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
+                "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+                "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 20, 100),
+                "verbose": -1,
+                "n_jobs": -1,
+                "seed": 42,
+                "boosting_type": "gbdt",
+            }
+
+            kf = KFold(n_splits=5, shuffle=True, random_state=42)
+            scores = []
+            for train_index, val_index in kf.split(X):
+                X_train, X_val = X.iloc[train_index], X.iloc[val_index]
+                y_train, y_val = y.iloc[train_index], y.iloc[val_index]
+                model = lgb.LGBMRegressor(**params)
+                model.fit(X_train, y_train)
+                preds = model.predict(X_val)
+                scores.append(mean_absolute_error(y_val, preds))
+            return np.mean(scores)
+
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=100)
+
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"  Value: {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
+
+        self.model = lgb.LGBMRegressor(**trial.params)
         self.model.fit(X, y)
 
     def predict(self, X):
