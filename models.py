@@ -21,9 +21,9 @@ class EnsembleModel:
     def fit(self, X, y):
         for model in self.models_to_train:
             print(f"  - Training {model.__class__.__name__}...")
-            if "verbose" in model.get_params():
+            try:
                 model.fit(X, y, verbose=False)
-            else:
+            except TypeError:
                 model.fit(X, y)
             self.trained_models.append(model)
 

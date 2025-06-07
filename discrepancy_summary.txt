@@ -1,0 +1,50 @@
+Discrepancy Analysis Summary
+==============================
+
+Total number of discrepant pairs found: 987
+
+Summary Statistics for Distances and Differences:
+       input_distance  output_difference
+count      987.000000         987.000000
+mean         3.184415           1.326283
+std          0.712172           0.150419
+min          0.387500           1.156200
+25%          2.822350           1.211950
+50%          3.383400           1.284000
+75%          3.753950           1.404950
+max          3.995300           2.066500
+
+Summary Statistics for Case 1 Inputs and Outputs:
+       case_1_trip_duration_days  case_1_miles_traveled  case_1_total_receipts_amount  case_1_actual_reimbursement
+count                 987.000000             987.000000                    987.000000                   987.000000
+mean                    5.334347             387.835410                   1122.794701                   928.101905
+std                     2.257210             267.632074                    550.024685                   496.238269
+min                     1.000000              10.000000                    193.620000                   162.180000
+25%                     4.000000             195.730000                    658.120000                   511.230000
+50%                     5.000000             286.000000                   1130.380000                   788.530000
+75%                     7.000000             521.000000                   1411.490000                  1368.940000
+max                    14.000000            1185.000000                   2447.820000                  2279.820000
+
+Summary Statistics for Case 2 Inputs and Outputs:
+       case_2_trip_duration_days  case_2_miles_traveled  case_2_total_receipts_amount  case_2_actual_reimbursement
+count                 987.000000             987.000000                    987.000000                   987.000000
+mean                    5.116515             410.578642                   1226.422259                  1081.298987
+std                     2.534468             254.889081                    539.208703                   423.750129
+min                     1.000000              15.000000                    137.840000                   150.340000
+25%                     3.000000             199.000000                    888.240000                   644.690000
+50%                     5.000000             333.000000                   1245.670000                  1167.780000
+75%                     7.500000             579.000000                   1645.990000                  1435.340000
+max                    14.000000            1203.000000                   2503.460000                  2214.640000
+
+Top 10 Most Frequent Cases in Discrepancies:
+547    120.0
+683    110.0
+243     63.0
+151     58.0
+114     55.0
+433     46.0
+366     38.0
+710     32.0
+414     28.0
+942     27.0
+

@@ -22,6 +22,7 @@ FEATURES = [
     "miles_x_duration",
     "receipts_x_duration",
     "miles_x_receipts",
+    "miles_per_receipt",
     "log1p_miles_per_day_x_log1p_receipts_per_day",
     "log1p_miles_per_day_x_miles_per_day",
     "log1p_miles_per_day_x_receipts_per_day",
@@ -30,8 +31,10 @@ FEATURES = [
     "log1p_receipts_per_day_x_receipts_per_day",
     "log1p_receipts_per_day_x_trip_duration_days",
     "miles_per_day_x_receipts_per_day",
-    "miles_per_day_x_trip_duration_days",
-    "receipts_per_day_x_trip_duration_days",
+    "log1p_miles_per_day_x_miles_per_receipt",
+    "log1p_receipts_per_day_x_miles_per_receipt",
+    "miles_per_day_x_miles_per_receipt",
+    "receipts_per_day_x_miles_per_receipt",
 ]
 
 
@@ -75,12 +78,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df_eng["miles_x_receipts"] = (
         df_eng["miles_traveled"] * df_eng["total_receipts_amount"]
     )
+    receipts_safe = df_eng["total_receipts_amount"].replace(0, 1)
+    df_eng["miles_per_receipt"] = df_eng["miles_traveled"] / receipts_safe
     main_features = [
         "log1p_miles_per_day",
         "log1p_receipts_per_day",
         "miles_per_day",
         "receipts_per_day",
-        "trip_duration_days",
+        "miles_per_receipt",
     ]
     for i in range(len(main_features)):
         for j in range(i + 1, len(main_features)):
@@ -88,6 +93,16 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             f2 = main_features[j]
             col_name = f"{f1}_x_{f2}"
             df_eng[col_name] = df_eng[f1] * df_eng[f2]
+
+    log_features = [
+        "log1p_miles_per_day",
+        "log1p_receipts_per_day",
+    ]
+
+    for f in log_features:
+        col_name = f"{f}_x_trip_duration_days"
+        df_eng[col_name] = df_eng[f] * df_eng["trip_duration_days"]
+
     return df_eng
 
 
@@ -98,12 +113,10 @@ class ModelWrapper:
 
     def fit(self, X, y):
         self.feature_names = X.columns.tolist()
-        # The fit method of the underlying model is called
         if hasattr(self.model, "fit"):
-            # Handle models with a 'verbose' parameter in their fit method
-            if "verbose" in self.model.get_params():
+            try:
                 self.model.fit(X, y, verbose=False)
-            else:
+            except TypeError:
                 self.model.fit(X, y)
         else:
             raise TypeError("Provided model object does not have a fit method")
