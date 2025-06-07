@@ -33,7 +33,7 @@ The system takes three inputs:
 
 ## Getting Started
 
-1. **Analyze the data**: 
+1. **Analyze the data**:
    - Look at `public_cases.json` to understand patterns
    - Look at `PRD.md` to understand the business problem
    - Look at `INTERVIEWS.md` to understand the business logic
@@ -41,7 +41,7 @@ The system takes three inputs:
    - Copy `run.sh.template` to `run.sh`
    - Implement your calculation logic
    - Make sure it outputs just the reimbursement amount
-3. **Test your solution**: 
+3. **Test your solution**:
    - Run `./eval.sh` to see how you're doing
    - Use the feedback to improve your algorithm
 4. **Submit**:

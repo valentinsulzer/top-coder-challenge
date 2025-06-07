@@ -1,0 +1,17 @@
+[project]
+name = "top-coder-challenge"
+version = "0.1.0"
+description = "A project to reverse-engineer a legacy reimbursement system."
+dependencies = [
+    "pytest",
+    "pylint",
+    "black",
+    "pandas",
+    "jupyter",
+    "seaborn",
+    "matplotlib",
+    "scikit-learn",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
