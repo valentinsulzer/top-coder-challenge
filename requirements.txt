@@ -5,4 +5,5 @@ lightgbm
 optuna
 matplotlib
 seaborn
-xgboost 
+xgboost
+shap 

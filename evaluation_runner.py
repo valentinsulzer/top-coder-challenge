@@ -2,12 +2,14 @@ import pandas as pd
 import numpy as np
 import os
 import sys
+import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 from common_utils import engineer_features
+import shap
 
 
-def run_evaluation(model, model_name, feature_cols):
+def run_evaluation(model, model_name, feature_cols, target_transform="raw"):
     """
     Runs a full evaluation for a given model.
 
@@ -15,6 +17,7 @@ def run_evaluation(model, model_name, feature_cols):
         model: The trained model object.
         model_name (str): The name of the model for titles and filenames.
         feature_cols (list): The list of feature names.
+        target_transform (str): The transformation to apply to the model's predictions.
     """
     print(f"🧾 Black Box Challenge - Reimbursement System Evaluation ({model_name})")
     print("===================================================================")
@@ -51,11 +54,93 @@ def run_evaluation(model, model_name, feature_cols):
     print("⚙️  Engineering features for evaluation set...")
     df_eval = engineer_features(df)
 
+    # SHAP Analysis for tree-based models
+    if hasattr(model.model, "predict") and hasattr(model.model, "feature_importances_"):
+        print("📊 Generating SHAP summary plot...")
+        # Using a subset of data for performance reasons
+        X_sampled = df_eval[feature_cols].sample(100, random_state=42)
+        explainer = shap.TreeExplainer(model.model)
+        shap_values = explainer.shap_values(X_sampled)
+
+        plt.figure()
+        shap.summary_plot(shap_values, X_sampled, plot_type="bar", show=False)
+        plt.title(f"SHAP Feature Importance ({model_name})")
+        plt.tight_layout()
+        shap_plot_path = os.path.join(output_dir, "shap_summary.png")
+        plt.savefig(shap_plot_path)
+        plt.close()
+        print(f"  - SHAP summary plot saved to '{shap_plot_path}'")
+        print()
+
+    if "xgboost" in model_name.lower():
+        print("🔍 Analyzing XGBoost model structure...")
+        booster = model.model.get_booster()
+
+        model_dump = booster.get_dump(dump_format="text")
+
+        split_pattern = re.compile(r"\[(.*?)<([^\]]+)\]")
+
+        splits = []
+        for tree in model_dump:
+            for line in tree.split("\n"):
+                match = split_pattern.search(line)
+                if match:
+                    feature_name = match.group(1)
+                    threshold = float(match.group(2))
+
+                    # Simplified extraction, gain is not easily available in text dump with feature names
+                    splits.append(
+                        {
+                            "feature": feature_name,
+                            "threshold": threshold,
+                        }
+                    )
+
+        if splits:
+            splits_df = pd.DataFrame(splits)
+
+            # Show top 10 features by split frequency
+            print("\n📊 Top 10 Features by Split Frequency:")
+            feature_split_counts = splits_df["feature"].value_counts().head(10)
+            print(feature_split_counts.to_string())
+
+            # Show most common thresholds for top features
+            print("\n\n📋 Common Thresholds for Top Features:")
+            for feature in feature_split_counts.index:
+                print(f"\n  - Feature: {feature}")
+                thresholds = splits_df[splits_df["feature"] == feature]["threshold"]
+                if len(thresholds.unique()) > 1:
+                    try:
+                        quantiles = pd.qcut(
+                            thresholds,
+                            q=min(5, len(thresholds.unique()) - 1),
+                            duplicates="drop",
+                        )
+                        print("    Common threshold ranges (quantiles):")
+                        print(
+                            quantiles.value_counts(normalize=True)
+                            .sort_index()
+                            .to_string()
+                        )
+                    except ValueError:
+                        print("    Could not determine interesting threshold ranges.")
+                else:
+                    print(f"    Single threshold: {thresholds.iloc[0]}")
+            print()
+        else:
+            print("  - No splits found in the model dump.")
+        print()
+
     print("🔮 Predicting on evaluation set...")
-    log_preds = model.predict(df_eval)
-    reimbursement_per_day = np.expm1(log_preds)
-    duration = df_eval["trip_duration_days"]
-    predicted_output = reimbursement_per_day * duration
+    preds = model.predict(df_eval)
+
+    if target_transform == "log":
+        reimbursement_per_day = np.expm1(preds)
+        duration = df_eval["trip_duration_days"]
+        predicted_output = reimbursement_per_day * duration
+    else:
+        predicted_output = preds
+
     df_eval["predicted_output"] = np.round(predicted_output, 2)
     df_eval["error"] = abs(df_eval["predicted_output"] - df_eval["expected_output"])
 

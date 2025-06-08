@@ -5,55 +5,43 @@ from human_model import output_model
 
 
 FEATURES = [
-    "human_model_output",
     "trip_duration_days",
     "miles_traveled",
     "total_receipts_amount",
     "miles_per_day",
     "receipts_per_day",
-    "log1p_miles_per_day",
-    "log1p_receipts_per_day",
-    "log1p_miles_traveled",
-    "log1p_trip_duration_days",
-    "log1p_total_receipts_amount",
-    "miles_sq",
-    "receipts_sq",
-    "duration_sq",
+    # "log1p_miles_per_day",
+    # "log1p_receipts_per_day",
+    # "log1p_miles_traveled",
+    # "log1p_trip_duration_days",
+    # "log1p_total_receipts_amount",
+    # "miles_sq",
+    # "receipts_sq",
+    # "duration_sq",
     "miles_x_duration",
     "receipts_x_duration",
     "miles_x_receipts",
     "miles_per_receipt",
-    "log1p_miles_per_day_x_log1p_receipts_per_day",
-    "log1p_miles_per_day_x_miles_per_day",
-    "log1p_miles_per_day_x_receipts_per_day",
-    "log1p_miles_per_day_x_trip_duration_days",
-    "log1p_receipts_per_day_x_miles_per_day",
-    "log1p_receipts_per_day_x_receipts_per_day",
-    "log1p_receipts_per_day_x_trip_duration_days",
+    "receipts_per_mile",
+    # "log1p_miles_per_day_x_log1p_receipts_per_day",
+    # "log1p_miles_per_day_x_miles_per_day",
+    # "log1p_miles_per_day_x_receipts_per_day",
+    # "log1p_miles_per_day_x_trip_duration_days",
+    # "log1p_receipts_per_day_x_miles_per_day",
+    # "log1p_receipts_per_day_x_receipts_per_day",
+    # "log1p_receipts_per_day_x_trip_duration_days",
     "miles_per_day_x_receipts_per_day",
-    "log1p_miles_per_day_x_miles_per_receipt",
-    "log1p_receipts_per_day_x_miles_per_receipt",
+    # "log1p_miles_per_day_x_miles_per_receipt",
+    # "log1p_receipts_per_day_x_miles_per_receipt",
     "miles_per_day_x_miles_per_receipt",
     "receipts_per_day_x_miles_per_receipt",
+    "miles_per_day_x_receipts_per_mile",
+    "receipts_per_day_x_receipts_per_mile",
 ]
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df_eng = df.copy()
-
-    # Add human model output as a feature if parameters are available
-    params_path = "human_model_params.npy"
-    if os.path.exists(params_path):
-        human_params = np.load(params_path)
-        df_eng["human_model_output"] = output_model(
-            human_params,
-            df_eng["miles_traveled"],
-            df_eng["total_receipts_amount"],
-            df_eng["trip_duration_days"],
-        )
-    else:
-        # If the parameters don't exist, fill the column with zeros
-        df_eng["human_model_output"] = 0
 
     duration_safe = df_eng["trip_duration_days"].replace(0, 1)
     df_eng["miles_per_day"] = df_eng["miles_traveled"] / duration_safe
@@ -63,14 +51,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df_eng["log1p_reimbursement_per_day"] = np.log1p(
             df_eng["reimbursement_per_day"]
         )
-    df_eng["log1p_miles_traveled"] = np.log1p(df_eng["miles_traveled"])
-    df_eng["log1p_trip_duration_days"] = np.log1p(df_eng["trip_duration_days"])
-    df_eng["log1p_total_receipts_amount"] = np.log1p(df_eng["total_receipts_amount"])
-    df_eng["log1p_miles_per_day"] = np.log1p(df_eng["miles_per_day"])
-    df_eng["log1p_receipts_per_day"] = np.log1p(df_eng["receipts_per_day"])
-    df_eng["miles_sq"] = df_eng["miles_traveled"] ** 2
-    df_eng["receipts_sq"] = df_eng["total_receipts_amount"] ** 2
-    df_eng["duration_sq"] = df_eng["trip_duration_days"] ** 2
+    # df_eng["log1p_miles_traveled"] = np.log1p(df_eng["miles_traveled"])
+    # df_eng["log1p_trip_duration_days"] = np.log1p(df_eng["trip_duration_days"])
+    # df_eng["log1p_total_receipts_amount"] = np.log1p(df_eng["total_receipts_amount"])
+    # df_eng["log1p_miles_per_day"] = np.log1p(df_eng["miles_per_day"])
+    # df_eng["log1p_receipts_per_day"] = np.log1p(df_eng["receipts_per_day"])
+    # df_eng["miles_sq"] = df_eng["miles_traveled"] ** 2
+    # df_eng["receipts_sq"] = df_eng["total_receipts_amount"] ** 2
+    # df_eng["duration_sq"] = df_eng["trip_duration_days"] ** 2
     df_eng["miles_x_duration"] = df_eng["miles_traveled"] * df_eng["trip_duration_days"]
     df_eng["receipts_x_duration"] = (
         df_eng["total_receipts_amount"] * df_eng["trip_duration_days"]
@@ -80,12 +68,17 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     receipts_safe = df_eng["total_receipts_amount"].replace(0, 1)
     df_eng["miles_per_receipt"] = df_eng["miles_traveled"] / receipts_safe
+    df_eng["receipts_per_mile"] = (
+        df_eng["total_receipts_amount"] / df_eng["miles_traveled"]
+    )
+
     main_features = [
-        "log1p_miles_per_day",
-        "log1p_receipts_per_day",
+        # "log1p_miles_per_day",
+        # "log1p_receipts_per_day",
         "miles_per_day",
         "receipts_per_day",
         "miles_per_receipt",
+        "receipts_per_mile",
     ]
     for i in range(len(main_features)):
         for j in range(i + 1, len(main_features)):
@@ -94,14 +87,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             col_name = f"{f1}_x_{f2}"
             df_eng[col_name] = df_eng[f1] * df_eng[f2]
 
-    log_features = [
-        "log1p_miles_per_day",
-        "log1p_receipts_per_day",
-    ]
+    # log_features = [
+    #     "log1p_miles_per_day",
+    #     "log1p_receipts_per_day",
+    # ]
 
-    for f in log_features:
-        col_name = f"{f}_x_trip_duration_days"
-        df_eng[col_name] = df_eng[f] * df_eng["trip_duration_days"]
+    # for f in log_features:
+    #     col_name = f"{f}_x_trip_duration_days"
+    #     df_eng[col_name] = df_eng[f] * df_eng["trip_duration_days"]
 
     return df_eng
 
@@ -130,15 +123,20 @@ class ModelWrapper:
         return self.model.predict(X)
 
 
-def load_and_train_model(model_instance, features):
+def load_and_train_model(model_instance, features, target_transform="raw"):
     df = pd.read_csv("public_cases.csv")
     df = engineer_features(df)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df.dropna(subset=["log1p_reimbursement_per_day"], inplace=True)
-    X = df[features]
-    y = df["log1p_reimbursement_per_day"]
 
-    print("Fitting model...")
+    if target_transform == "log":
+        df.dropna(subset=["log1p_reimbursement_per_day"], inplace=True)
+        y = df["log1p_reimbursement_per_day"]
+    else:
+        y = df["expected_output"]
+
+    X = df[features]
+
+    print(f"Fitting model on '{target_transform}' target...")
     model = ModelWrapper(model_instance)
     model.fit(X, y)
     print("Model fitting complete.")
@@ -146,14 +144,19 @@ def load_and_train_model(model_instance, features):
     return model, X.columns.tolist()
 
 
-def calculate_reimbursement(model, feature_cols, **kwargs):
+def calculate_reimbursement(model, feature_cols, target_transform="raw", **kwargs):
     X = engineer_features(pd.DataFrame([kwargs]))
     for col in feature_cols:
         if col not in X:
             X[col] = 0
     X = X[feature_cols]
-    log_pred = model.predict(X)[0]
-    reimbursement_per_day = np.expm1(log_pred)
-    duration = X["trip_duration_days"].iloc[0]
-    total_reimbursement = reimbursement_per_day * duration
-    return round(float(total_reimbursement), 2)
+    pred = model.predict(X)[0]
+
+    if target_transform == "log":
+        reimbursement_per_day = np.expm1(pred)
+        duration = kwargs["trip_duration_days"]
+        final_pred = reimbursement_per_day * duration
+    else:
+        final_pred = pred
+
+    return round(float(final_pred), 2)

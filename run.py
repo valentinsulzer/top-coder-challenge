@@ -28,6 +28,13 @@ def main():
         help="The mode to run the script in.",
     )
     parser.add_argument(
+        "--target-transform",
+        type=str,
+        choices=["log", "raw"],
+        default="raw",
+        help="Transformation to apply to the target variable before training.",
+    )
+    parser.add_argument(
         "--days", type=int, help="Trip duration in days for prediction."
     )
     parser.add_argument("--miles", type=float, help="Miles traveled for prediction.")
@@ -46,26 +53,43 @@ def main():
             for model_name, config in MODEL_CONFIGS.items():
                 print(f"--- Running evaluation for {config['name']} ---")
                 model_instance = config["model"]()
-                model, feature_cols = load_and_train_model(model_instance, FEATURES)
-                run_evaluation(model, config["name"], feature_cols)
+                model, feature_cols = load_and_train_model(
+                    model_instance, FEATURES, target_transform=args.target_transform
+                )
+                run_evaluation(
+                    model,
+                    config["name"],
+                    feature_cols,
+                    target_transform=args.target_transform,
+                )
                 print(f"--- Finished evaluation for {config['name']} ---\n")
         else:
             model_instance = MODEL_CONFIGS[model_key]["model"]()
-            model, feature_cols = load_and_train_model(model_instance, FEATURES)
-            run_evaluation(model, MODEL_CONFIGS[model_key]["name"], feature_cols)
+            model, feature_cols = load_and_train_model(
+                model_instance, FEATURES, target_transform=args.target_transform
+            )
+            run_evaluation(
+                model,
+                MODEL_CONFIGS[model_key]["name"],
+                feature_cols,
+                target_transform=args.target_transform,
+            )
     elif args.mode == "predict":
         if not all([args.days, args.miles, args.receipts]):
             print(
                 "Error: For prediction mode, you must provide --days, --miles, and --receipts."
             )
             sys.exit(1)
-        model, feature_cols = load_and_train_model(model_instance, FEATURES)
+        model, feature_cols = load_and_train_model(
+            model_instance, FEATURES, target_transform=args.target_transform
+        )
         reimbursement = calculate_reimbursement(
             model,
             feature_cols,
             trip_duration_days=args.days,
             miles_traveled=args.miles,
             total_receipts_amount=args.receipts,
+            target_transform=args.target_transform,
         )
         print(f"Predicted Reimbursement: ${reimbursement}")
 
