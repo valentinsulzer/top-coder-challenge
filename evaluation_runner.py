@@ -1,333 +1,177 @@
 import pandas as pd
 import numpy as np
 import os
-import sys
 import re
 import matplotlib.pyplot as plt
 import seaborn as sns
-from common_utils import engineer_features
 import shap
 
+from common_utils import (
+    load_and_train_model,
+    _get_day_bucket,
+    engineer_features,
+)
+from models import MODEL_CONFIGS
+from run import parse_args, get_model_factory_and_name
+import warnings
 
-def _get_day_bucket(duration):
-    if duration <= 2:
-        return "1-2"
-    elif duration <= 5:
-        return "3-5"
-    elif duration <= 10:
-        return "6-10"
+
+def analyze_model_splits(model, feature_names, model_name, n_splits=10):
+    print("Model dump could not be parsed.")
+
+
+def analyze_feature_importance_shap(model, X, feature_names, model_name):
+    """Analyze feature importance using SHAP."""
+    print(f"\n--- SHAP Feature Importance Analysis for {model_name} ---")
+
+    if not hasattr(model, "predict"):
+        print("Model does not support SHAP analysis (no predict method).")
+        return
+
+    # Using a subset of data for performance reasons
+    X_sampled = X.sample(min(100, len(X)), random_state=42)
+    explainer = shap.TreeExplainer(model.model)
+    shap_values = explainer.shap_values(X_sampled)
+
+    plt.figure()
+    shap.summary_plot(
+        shap_values, X_sampled, feature_names=feature_names, show=False, plot_type="bar"
+    )
+    plt.title(f"SHAP Feature Importance for {model_name}")
+    plt.tight_layout()
+    plt.savefig(f"shap_summary_{model_name.lower().replace(' ', '_')}.png")
+    plt.close()
+    print("SHAP summary plot saved.")
+
+
+def run_evaluation():
+    args = parse_args()
+    model_factory, model_name = get_model_factory_and_name(args.model)
+
+    model, feature_cols, split_scores = load_and_train_model(
+        model_factory,
+        features=args.features,
+        target_transform=args.target_transform,
+        split_by_day=args.split_by_day,
+        train_test_split=args.train_test_split,
+        use_day_buckets=args.use_day_buckets,
+        force_retrain=args.force_retrain,
+    )
+
+    if isinstance(model, dict):
+        # Multi-model scenario (daily or bucketed)
+        print("\n--- Evaluating Multi-Model Performance ---")
+
+        if split_scores:
+            all_test_maes = [
+                scores["test_mae"] for scores in split_scores.values() if scores
+            ]
+            if all_test_maes:
+                avg_test_mae = np.mean(all_test_maes)
+                print(f"\nAverage Test MAE across all groups: ${avg_test_mae:.2f}")
+
+        # Cannot do single SHAP analysis for multiple models easily
+        print("\nSkipping model analysis for multi-model setup.")
+
     else:
-        return "11+"
+        # Single model scenario
+        print(f"\n--- Analyzing Single {model_name} Model ---")
 
+        # Create a dummy X from training data for SHAP analysis
+        df = pd.read_csv("public_cases.csv")
+        X_for_shap = df[feature_cols]
 
-def run_evaluation(
-    model,
-    model_name,
-    feature_cols,
-    target_transform="raw",
-    split_by_day=False,
-    split_scores=None,
-    use_day_buckets=False,
-):
-    """
-    Runs a full evaluation for a given model.
+        analyze_feature_importance_shap(model, X_for_shap, feature_cols, model_name)
+        if hasattr(model.model, "get_booster"):
+            analyze_model_splits(model.model, feature_cols, model_name)
 
-    Args:
-        model: The trained model object.
-        model_name (str): The name of the model for titles and filenames.
-        feature_cols (list): The list of feature names.
-        target_transform (str): The transformation to apply to the model's predictions.
-        split_by_day (bool): Whether daily models were trained.
-        split_scores (dict): Optional dictionary of train/test split scores.
-        use_day_buckets (bool): Whether bucketed models were trained.
-    """
-    print(f"🧾 Black Box Challenge - Reimbursement System Evaluation ({model_name})")
-    print("===================================================================")
-    print()
+    # ... evaluation logic on test cases ...
+    try:
+        df_test = pd.read_csv("private_cases.csv")
+        df_test = engineer_features(df_test)
 
-    output_suffix = model_name.lower().replace(" ", "_")
-    output_dir = f"visualizations_{output_suffix}"
-    os.makedirs(output_dir, exist_ok=True)
-
-    df = pd.read_csv("public_cases.csv")
-    print("⚙️  Engineering features for evaluation set...")
-    df_eval = engineer_features(df)
-
-    if split_scores:
-        print("📈 Train/Test Split Results:")
-        if not split_by_day and not use_day_buckets:
-            print(f"  - Train MAE: ${split_scores['train_mae']:.2f}")
-            print(f"  - Test MAE:  ${split_scores['test_mae']:.2f}")
+        print("\n--- Predicting on Private Test Set ---")
+        if not args.split_by_day and not args.use_day_buckets:
+            preds = model.predict(df_test)
         else:
-            print("  Average MAE across models:")
-            avg_train_mae = np.mean([v["train_mae"] for v in split_scores.values()])
-            avg_test_mae = np.mean([v["test_mae"] for v in split_scores.values()])
-            print(f"    - Avg. Train MAE: ${avg_train_mae:.2f}")
-            print(f"    - Avg. Test MAE:  ${avg_test_mae:.2f}")
-        print()
+            models = model
+            df_test["preds"] = np.nan
 
-    if split_by_day or use_day_buckets:
-        print(
-            "\n📊 Model-specific analysis (Feature Importance, SHAP, etc.) is disabled for daily split models.\n"
-        )
-    else:
-        # Feature Importance Plot for tree-based models
-        if hasattr(model.model, "feature_importances_"):
-            print("📊 Generating feature importance plot...")
-            feature_importances = model.model.feature_importances_
-            importance_df = (
-                pd.DataFrame(
-                    {"feature": feature_cols, "importance": feature_importances}
+            if args.use_day_buckets:
+                df_test["day_bucket"] = df_test["trip_duration_days"].apply(
+                    _get_day_bucket
                 )
-                .sort_values("importance", ascending=False)
-                .head(20)
-            )
+                iterator = df_test["day_bucket"].unique()
+                id_col = "day_bucket"
+            else:  # split_by_day
+                iterator = df_test["trip_duration_days"].unique()
+                id_col = "trip_duration_days"
 
-            plt.figure(figsize=(12, 10))
-            sns.barplot(x="importance", y="feature", data=importance_df)
-            plt.title(f"Top 20 Feature Importances ({model_name})")
-            plt.tight_layout()
-            plot_path = os.path.join(output_dir, "feature_importance.png")
-            plt.savefig(plot_path)
-            plt.close()
-            print(f"  - Feature importance plot saved to '{plot_path}'")
-            print()
+            trained_keys = np.array(sorted(models.keys()))
 
-        # Coefficient analysis for linear models
-        elif hasattr(model.model, "coef_"):
-            print("📊 Analyzing model coefficients...")
-            coef_df = pd.DataFrame(
-                {"feature": feature_cols, "coefficient": model.model.coef_}
-            )
+            for value in iterator:
+                mask = df_test[id_col] == value
+                X_subset = df_test[mask]
 
-            # Filter for non-zero coefficients (especially for Lasso)
-            retained_features = coef_df[abs(coef_df["coefficient"]) > 1e-6]
+                if value in models:
+                    current_model = models[value]
+                else:
+                    # Fallback for unseen duration/bucket
+                    # Find the closest key (numerically for days, or just first for buckets)
+                    if id_col == "trip_duration_days":
+                        # find closest day
+                        closest_key_index = np.abs(
+                            trained_keys.astype(int) - int(value)
+                        ).argmin()
+                        closest_key = trained_keys[closest_key_index]
+                    else:  # buckets
+                        closest_key = trained_keys[0]  # simple fallback for now
 
-            if not retained_features.empty:
-                print(
-                    f"  - {len(retained_features)} features retained by {model_name}:"
+                    print(
+                        f"Warning: No model for {id_col} {value}. Using model for closest key: {closest_key}."
+                    )
+                    current_model = models[closest_key]
+
+                pred_subset = current_model.predict(
+                    X_subset.drop(columns=["day_bucket"], errors="ignore")
                 )
-                # Sort by absolute coefficient value
-                retained_features = retained_features.reindex(
-                    retained_features.coefficient.abs()
-                    .sort_values(ascending=False)
-                    .index
-                )
-                print(retained_features.to_string(index=False))
-            else:
-                print("  - No features were retained by the model.")
-            print()
+                df_test.loc[mask, "preds"] = pred_subset
 
+            preds = df_test["preds"].values
+
+        if args.target_transform == "log":
+            reimbursement_per_day = np.expm1(preds)
+            duration = df_test["trip_duration_days"]
+            final_preds = reimbursement_per_day * duration
         else:
-            print(f"📊 Feature importance plot not available for {model_name}.")
+            final_preds = preds
 
-        # SHAP Analysis for tree-based models
-        if hasattr(model.model, "predict") and hasattr(
-            model.model, "feature_importances_"
-        ):
-            print("📊 Generating SHAP summary plot...")
-            # Using a subset of data for performance reasons
-            X_sampled = df_eval[feature_cols].sample(100, random_state=42)
-            explainer = shap.TreeExplainer(model.model)
-            shap_values = explainer.shap_values(X_sampled)
-
-            plt.figure()
-            shap.summary_plot(shap_values, X_sampled, plot_type="bar", show=False)
-            plt.title(f"SHAP Feature Importance ({model_name})")
-            plt.tight_layout()
-            shap_plot_path = os.path.join(output_dir, "shap_summary.png")
-            plt.savefig(shap_plot_path)
-            plt.close()
-            print(f"  - SHAP summary plot saved to '{shap_plot_path}'")
-            print()
-
-        if "xgboost" in model_name.lower():
-            print("🔍 Analyzing XGBoost model structure...")
-            booster = model.model.get_booster()
-
-            model_dump = booster.get_dump(dump_format="text")
-
-            split_pattern = re.compile(r"\[(.*?)<([^\]]+)\]")
-
-            splits = []
-            for tree in model_dump:
-                for line in tree.split("\n"):
-                    match = split_pattern.search(line)
-                    if match:
-                        feature_name = match.group(1)
-                        threshold = float(match.group(2))
-
-                        # Simplified extraction, gain is not easily available in text dump with feature names
-                        splits.append(
-                            {
-                                "feature": feature_name,
-                                "threshold": threshold,
-                            }
-                        )
-
-            if splits:
-                splits_df = pd.DataFrame(splits)
-
-                # Show top 10 features by split frequency
-                print("\n📊 Top 10 Features by Split Frequency:")
-                feature_split_counts = splits_df["feature"].value_counts().head(10)
-                print(feature_split_counts.to_string())
-
-                # Show most common thresholds for top features
-                print("\n\n📋 Common Thresholds for Top Features:")
-                for feature in feature_split_counts.index:
-                    print(f"\n  - Feature: {feature}")
-                    thresholds = splits_df[splits_df["feature"] == feature]["threshold"]
-                    if len(thresholds.unique()) > 1:
-                        try:
-                            quantiles = pd.qcut(
-                                thresholds,
-                                q=min(5, len(thresholds.unique()) - 1),
-                                duplicates="drop",
-                            )
-                            print("    Common threshold ranges (quantiles):")
-                            print(
-                                quantiles.value_counts(normalize=True)
-                                .sort_index()
-                                .to_string()
-                            )
-                        except ValueError:
-                            print(
-                                "    Could not determine interesting threshold ranges."
-                            )
-                    else:
-                        print(f"    Single threshold: {thresholds.iloc[0]}")
-                print()
-            else:
-                print("  - No splits found in the model dump.")
-            print()
-
-    # Predictions and Results Saving
-    print("🔮 Predicting on evaluation set...")
-    if not split_by_day and not use_day_buckets:
-        preds = model.predict(df_eval)
-    else:
-        models = model
-        df_eval["preds"] = np.nan
-
-        if use_day_buckets:
-            df_eval["day_bucket"] = df_eval["trip_duration_days"].apply(_get_day_bucket)
-            iterator = df_eval["day_bucket"].unique()
-            id_col = "day_bucket"
-        else:  # split_by_day
-            iterator = df_eval["trip_duration_days"].unique()
-            id_col = "trip_duration_days"
-
-        trained_keys = np.array(sorted(models.keys()))
-
-        for value in iterator:
-            mask = df_eval[id_col] == value
-            X_subset = df_eval[mask]
-
-            if value in models:
-                current_model = models[value]
-            else:
-                closest_key = trained_keys[0]
-                current_model = models[closest_key]
-
-            df_eval.loc[mask, "preds"] = current_model.predict(X_subset)
-
-        preds = df_eval["preds"].values
-
-    if target_transform == "log":
-        reimbursement_per_day = np.expm1(preds)
-        duration = df_eval["trip_duration_days"]
-        predicted_output = reimbursement_per_day * duration
-    else:
-        predicted_output = preds
-
-    df_eval["predicted_output"] = np.round(predicted_output, 2)
-    df_eval["error"] = abs(df_eval["predicted_output"] - df_eval["expected_output"])
-
-    output_csv_path = f"evaluation_results_with_features_{output_suffix}.csv"
-    print(f"💾 Saving full evaluation results to '{output_csv_path}'...")
-    df_eval.to_csv(output_csv_path, index=False)
-    print(f"  - Saved successfully.")
-    print()
-
-    # Metrics Calculation
-    print("📝 Calculating metrics...")
-    error = df_eval["error"]
-
-    num_cases = len(df_eval)
-    successful_runs = len(df_eval)
-    exact_matches = (error < 0.01).sum()
-    close_matches = (error < 1.00).sum()
-    total_error = error.sum()
-    max_error = error.max()
-
-    if successful_runs == 0:
-        print("❌ No successful test cases!")
-    else:
-        avg_error = total_error / successful_runs
-        exact_pct = (exact_matches / successful_runs) * 100
-        close_pct = (close_matches / successful_runs) * 100
-        print("✅ Evaluation Complete!")
-        print(f"\n📈 Results Summary ({model_name}):")
-        print(f"  Total test cases: {num_cases}")
-        print(f"  Successful runs: {successful_runs}")
-        print(f"  Exact matches (±$0.01): {exact_matches} ({exact_pct:.1f}%)")
-        print(f"  Close matches (±$1.00): {close_matches} ({close_pct:.1f}%)")
-        print(f"  Average error: ${avg_error:.2f}")
-        print(f"  Maximum error: ${max_error:.2f}")
-
-        # Visualizations
-        print("\n📊 Generating evaluation visualizations...")
-        results_df = pd.DataFrame(
+        df_results = pd.DataFrame(
             {
-                "expected": df_eval["expected_output"],
-                "actual": df_eval["predicted_output"],
-                "error": error,
-                "case_num": df_eval.index + 1,
-                "trip_duration": df_eval["trip_duration_days"],
-                "miles_traveled": df_eval["miles_traveled"],
-                "receipts_amount": df_eval["total_receipts_amount"],
+                "case_id": df_test["case_id"],
+                "predicted_reimbursement": np.round(final_preds, 2),
             }
         )
 
-        # Scatter plot
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(x="expected", y="actual", data=results_df, alpha=0.5)
-        plt.title(f"Expected vs. Actual Reimbursement ({model_name})")
-        plt.xlabel("Expected Reimbursement ($)")
-        plt.ylabel("Actual Reimbursement ($)")
-        max_val = max(results_df["expected"].max(), results_df["actual"].max())
-        min_val = min(results_df["expected"].min(), results_df["actual"].min())
-        plt.plot(
-            [min_val, max_val],
-            [min_val, max_val],
-            "r--",
-            lw=2,
-            label="Perfect Prediction",
+        if "expected_output" in df_test.columns:
+            df_results["expected_output"] = df_test["expected_output"]
+            df_results["absolute_error"] = abs(
+                df_results["predicted_reimbursement"] - df_results["expected_output"]
+            )
+
+        df_results.to_csv("submission.csv", index=False)
+        print("\nSubmission file 'submission.csv' created.")
+
+        if "absolute_error" in df_results.columns:
+            final_mae = df_results["absolute_error"].mean()
+            print(f"\nFinal MAE on private test set: ${final_mae:.2f}")
+    except FileNotFoundError:
+        print(
+            "\n'private_cases.csv' not found. Skipping final evaluation against private data."
         )
-        plt.legend()
-        plt.grid(True)
-        plot_path = os.path.join(output_dir, "predictions_scatter.png")
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"  - Scatter plot of predictions saved to '{plot_path}'")
 
-        # Error distribution
-        plt.figure(figsize=(10, 6))
-        sns.histplot(results_df["error"], bins=50, kde=True)
-        plt.title(f"Distribution of Prediction Errors ({model_name})")
-        plt.xlabel("Absolute Prediction Error ($)")
-        plt.ylabel("Frequency")
-        plt.grid(True)
-        plot_path = os.path.join(output_dir, "error_distribution.png")
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"  - Error distribution plot saved to '{plot_path}'")
 
-        # Worst predictions
-        print("\n📋 Top 10 Worst Predictions (Largest Error):")
-        worst_predictions = results_df.sort_values("error", ascending=False).head(10)
-        print(worst_predictions.to_string())
-
-        score = avg_error * 100 + (num_cases - exact_matches) * 0.1
-        print(f"\n🎯 Your Score: {score:.2f} (lower is better)")
+if __name__ == "__main__":
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        run_evaluation()

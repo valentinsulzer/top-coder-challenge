@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
+import os
+import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
-from sklearn.preprocessing import StandardScaler
 
 
 FEATURES = [
@@ -70,34 +71,32 @@ class ModelWrapper:
     def __init__(self, model):
         self.model = model
         self.feature_names = None
-        self.scaler = None
 
     def fit(self, X, y, eval_set=None):
         self.feature_names = X.columns.tolist()
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
 
+        fit_params = {}
         if eval_set:
-            X_eval, y_eval = eval_set
-            X_eval_scaled = self.scaler.transform(X_eval)
             fit_params = {
-                "eval_set": [(X_eval_scaled, y_eval)],
+                "eval_set": [(eval_set[0], eval_set[1])],
                 "early_stopping_rounds": 50,
-                "verbose": False,
             }
-        else:
-            fit_params = {}
 
         if hasattr(self.model, "fit"):
             try:
-                self.model.fit(X_scaled, y, **fit_params)
+                # Pass verbose=False if the model supports it to avoid noisy logs
+                if "verbose" in self.model.get_params():
+                    fit_params["verbose"] = False
+                self.model.fit(X, y, **fit_params)
             except TypeError:
-                # Fallback for models not supporting early stopping
+                # Fallback for models not supporting all fit_params
                 if "eval_set" in fit_params:
                     del fit_params["eval_set"]
+                if "early_stopping_rounds" in fit_params:
                     del fit_params["early_stopping_rounds"]
+                if "verbose" in fit_params:
                     del fit_params["verbose"]
-                self.model.fit(X_scaled, y, **fit_params)
+                self.model.fit(X, y, **fit_params)
         else:
             raise TypeError("Provided model object does not have a fit method")
 
@@ -107,8 +106,7 @@ class ModelWrapper:
             if col not in X:
                 X[col] = 0
         X = X[self.feature_names]
-        X_scaled = self.scaler.transform(X)
-        return self.model.predict(X_scaled)
+        return self.model.predict(X)
 
 
 def _run_train_test_split(model_factory, X, y, target_transform, test_size=0.2):
@@ -145,6 +143,8 @@ def load_and_train_model(
     split_by_day=False,
     train_test_split=False,
     use_day_buckets=False,
+    force_retrain=False,
+    verbose=True,
 ):
     df = pd.read_csv("public_cases.csv")
     df = engineer_features(df)
@@ -159,13 +159,18 @@ def load_and_train_model(
     X = df.loc[y.index, features]
     split_scores = None
 
+    model_dir = "trained_models"
+    os.makedirs(model_dir, exist_ok=True)
+
     if train_test_split:
-        print("Running train-test split...")
+        if verbose:
+            print("Running train-test split...")
         if not split_by_day and not use_day_buckets:
             split_scores = _run_train_test_split(model_factory, X, y, target_transform)
-            print(
-                f"  - Single Model -> Train MAE: ${split_scores['train_mae']:.2f}, Test MAE: ${split_scores['test_mae']:.2f}"
-            )
+            if verbose:
+                print(
+                    f"  - Single Model -> Train MAE: ${split_scores['train_mae']:.2f}, Test MAE: ${split_scores['test_mae']:.2f}"
+                )
         else:
             daily_split_scores = {}
             if use_day_buckets:
@@ -173,11 +178,13 @@ def load_and_train_model(
                 X["day_bucket"] = df["day_bucket"]
                 iterator = df["day_bucket"].unique()
                 id_col = "day_bucket"
-                print("  Splitting by day buckets...")
+                if verbose:
+                    print("  Splitting by day buckets...")
             else:  # split_by_day
                 iterator = X["trip_duration_days"].unique()
                 id_col = "trip_duration_days"
-                print("  Splitting by individual days...")
+                if verbose:
+                    print("  Splitting by individual days...")
 
             for value in sorted(iterator):
                 mask = X[id_col] == value
@@ -191,25 +198,38 @@ def load_and_train_model(
                     model_factory, X_subset, y_subset, target_transform
                 )
                 daily_split_scores[value] = scores
-
-                if use_day_buckets:
-                    print(
-                        f"    - Bucket: {str(value).ljust(5)} | Train MAE: ${scores['train_mae']:.2f}, Test MAE: ${scores['test_mae']:.2f}"
-                    )
-                else:
-                    print(
-                        f"    - Duration: {int(value):>2} days | Train MAE: ${scores['train_mae']:<7.2f} | Test MAE: ${scores['test_mae']:<7.2f}"
-                    )
+                if verbose:
+                    if use_day_buckets:
+                        print(
+                            f"    - Bucket: {str(value).ljust(5)} | Train MAE: ${scores['train_mae']:.2f}, Test MAE: ${scores['test_mae']:.2f}"
+                        )
+                    else:
+                        print(
+                            f"    - Duration: {int(value):>2} days | Train MAE: ${scores['train_mae']:<7.2f} | Test MAE: ${scores['test_mae']:<7.2f}"
+                        )
             split_scores = daily_split_scores
-        print()
+        if verbose:
+            print()
 
     # Train final model(s) on all data
     if not split_by_day and not use_day_buckets:
-        print(f"Fitting single model on '{target_transform}' target...")
+        model_path = os.path.join(model_dir, "single_model.joblib")
+        if not force_retrain and os.path.exists(model_path):
+            if verbose:
+                print(f"Loading cached model from {model_path}...")
+            model = joblib.load(model_path)
+            if verbose:
+                print("Model loading complete.")
+            return model, model.feature_names, split_scores
+
+        if verbose:
+            print(f"Fitting single model on '{target_transform}' target...")
         model_instance = model_factory()
         model = ModelWrapper(model_instance)
         model.fit(X, y)
-        print("Model fitting complete.")
+        joblib.dump(model, model_path)
+        if verbose:
+            print(f"Model fitting complete. Saved to {model_path}")
         return model, X.columns.tolist(), split_scores
     else:
         if use_day_buckets:
@@ -217,22 +237,64 @@ def load_and_train_model(
             X["day_bucket"] = df["day_bucket"]
             iterator = df["day_bucket"].unique()
             id_col = "day_bucket"
-            print(f"Fitting models for day buckets on '{target_transform}' target...")
+            if verbose:
+                print(
+                    f"Fitting models for day buckets on '{target_transform}' target..."
+                )
         else:  # split_by_day
             iterator = X["trip_duration_days"].unique()
             id_col = "trip_duration_days"
-            print(f"Fitting daily models on '{target_transform}' target...")
+            if verbose:
+                print(f"Fitting daily models on '{target_transform}' target...")
 
         models = {}
+        all_models_loaded = True
+        for value in sorted(iterator):
+            model_path = os.path.join(
+                model_dir, f"model_{id_col}_{str(value).replace(' ', '')}.joblib"
+            )
+            if not os.path.exists(model_path):
+                all_models_loaded = False
+                break
+
+        if all_models_loaded and not force_retrain:
+            if verbose:
+                print(f"Loading all cached models for {id_col}s...")
+            for value in sorted(iterator):
+                model_path = os.path.join(
+                    model_dir, f"model_{id_col}_{str(value).replace(' ', '')}.joblib"
+                )
+                models[value] = joblib.load(model_path)
+
+            if verbose:
+                print("All models loaded from cache.")
+            # Assume feature names are consistent across models
+            any_model = next(iter(models.values()))
+            return models, any_model.feature_names, split_scores
+
+        if verbose:
+            print(f"Fitting models for {id_col}s...")
         for value in sorted(iterator):
             mask = X[id_col] == value
             if mask.sum() < 10:
-                print(
-                    f"    Skipping {id_col} {value}, not enough samples ({mask.sum()})."
-                )
+                if verbose:
+                    print(
+                        f"    Skipping {id_col} {value}, not enough samples ({mask.sum()})."
+                    )
                 continue
 
-            print(f"  - Training model for {id_col}: {value} ({mask.sum()} samples)")
+            model_path = os.path.join(
+                model_dir, f"model_{id_col}_{str(value).replace(' ', '')}.joblib"
+            )
+            if not force_retrain and os.path.exists(model_path):
+                if verbose:
+                    print(f"  - Loading model for {id_col}: {value}")
+                models[value] = joblib.load(model_path)
+                continue
+            if verbose:
+                print(
+                    f"  - Training model for {id_col}: {value} ({mask.sum()} samples)"
+                )
 
             X_subset = X[mask].drop(columns=["day_bucket"] if use_day_buckets else [])
             y_subset = y[mask]
@@ -240,9 +302,13 @@ def load_and_train_model(
             model_instance = model_factory()
             model = ModelWrapper(model_instance)
             model.fit(X_subset, y_subset)
+            joblib.dump(model, model_path)
+            if verbose:
+                print(f"    - Saved model to {model_path}")
             models[value] = model
 
-        print("Model fitting complete.")
+        if verbose:
+            print("Model fitting complete.")
         return models, features, split_scores
 
 
@@ -252,6 +318,7 @@ def calculate_reimbursement(
     target_transform="raw",
     split_by_day=False,
     use_day_buckets=False,
+    verbose=True,
     **kwargs,
 ):
     X = engineer_features(pd.DataFrame([kwargs]))
@@ -276,9 +343,10 @@ def calculate_reimbursement(
             trained_keys = np.array(sorted(models.keys()))
             # This fallback is simpler for buckets; might need refinement
             closest_key = trained_keys[0]
-            print(
-                f"Warning: No model for {msg_type} {key}. Using model for closest {msg_type}: {closest_key}."
-            )
+            if verbose:
+                print(
+                    f"Warning: No model for {msg_type} {key}. Using model for closest {msg_type}: {closest_key}."
+                )
             duration_model = models[closest_key]
 
         pred = duration_model.predict(X.drop(columns=["day_bucket"], errors="ignore"))[

@@ -74,7 +74,7 @@ errors_array=()
 
 # Process each test case
 for ((i=0; i<num_cases; i++)); do
-    if [ $((i % 100)) -eq 0 ]; then
+    if [ $((i % 1)) -eq 0 ]; then
         echo "Progress: $i/$num_cases cases processed..." >&2
     fi
     

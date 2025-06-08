@@ -6,4 +6,5 @@ optuna
 matplotlib
 seaborn
 xgboost
-shap 
+shap
+joblib 

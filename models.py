@@ -1,6 +1,5 @@
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-from sklearn.linear_model import Ridge, Lasso
 import xgboost as xgb
 import numpy as np
 # from human_loop_model import HumanLoopModel
@@ -97,21 +96,11 @@ def get_ensemble_model():
     return EnsembleModel()
 
 
-def get_ridge_model():
-    return Ridge(alpha=1.0, random_state=42)
-
-
-def get_lasso_model():
-    return Lasso(alpha=0.1, random_state=42)
-
-
 MODEL_CONFIGS = {
     "lightgbm": {"model": get_lgbm_model, "name": "LightGBM"},
     "random_forest": {"model": get_rf_model, "name": "Random Forest"},
     "xgboost": {"model": get_xgb_model, "name": "XGBoost"},
     "extra_trees": {"model": get_et_model, "name": "Extra Trees"},
-    "ridge": {"model": get_ridge_model, "name": "Ridge Regression"},
-    "lasso": {"model": get_lasso_model, "name": "Lasso Regression"},
     "ensemble": {"model": get_ensemble_model, "name": "Ensemble"},
     # "human_loop": {"model": get_human_loop_model, "name": "Human-in-the-Loop"},
 }
