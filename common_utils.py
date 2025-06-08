@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
-import os
-from human_model import output_model
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import StandardScaler
 
 
 FEATURES = [
@@ -10,40 +11,34 @@ FEATURES = [
     "total_receipts_amount",
     "miles_per_day",
     "receipts_per_day",
-    # "log1p_miles_per_day",
-    # "log1p_receipts_per_day",
-    # "log1p_miles_traveled",
-    # "log1p_trip_duration_days",
-    # "log1p_total_receipts_amount",
-    # "miles_sq",
-    # "receipts_sq",
-    # "duration_sq",
     "miles_x_duration",
     "receipts_x_duration",
     "miles_x_receipts",
     "miles_per_receipt",
     "receipts_per_mile",
-    # "log1p_miles_per_day_x_log1p_receipts_per_day",
-    # "log1p_miles_per_day_x_miles_per_day",
-    # "log1p_miles_per_day_x_receipts_per_day",
-    # "log1p_miles_per_day_x_trip_duration_days",
-    # "log1p_receipts_per_day_x_miles_per_day",
-    # "log1p_receipts_per_day_x_receipts_per_day",
-    # "log1p_receipts_per_day_x_trip_duration_days",
-    "miles_per_day_x_receipts_per_day",
-    # "log1p_miles_per_day_x_miles_per_receipt",
-    # "log1p_receipts_per_day_x_miles_per_receipt",
-    "miles_per_day_x_miles_per_receipt",
-    "receipts_per_day_x_miles_per_receipt",
-    "miles_per_day_x_receipts_per_mile",
-    "receipts_per_day_x_receipts_per_mile",
 ]
+
+
+def _get_day_bucket(duration):
+    if duration <= 2:
+        return "1-2"
+    elif duration <= 5:
+        return "3-5"
+    elif duration <= 10:
+        return "6-10"
+    else:
+        return "11+"
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df_eng = df.copy()
 
-    duration_safe = df_eng["trip_duration_days"].replace(0, 1)
+    # Add a small epsilon to avoid division by zero
+    epsilon = 1e-6
+    duration_safe = df_eng["trip_duration_days"].replace(0, epsilon)
+    receipts_safe = df_eng["total_receipts_amount"].replace(0, epsilon)
+    miles_safe = df_eng["miles_traveled"].replace(0, epsilon)
+
     df_eng["miles_per_day"] = df_eng["miles_traveled"] / duration_safe
     df_eng["receipts_per_day"] = df_eng["total_receipts_amount"] / duration_safe
     if "expected_output" in df_eng.columns:
@@ -51,14 +46,6 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df_eng["log1p_reimbursement_per_day"] = np.log1p(
             df_eng["reimbursement_per_day"]
         )
-    # df_eng["log1p_miles_traveled"] = np.log1p(df_eng["miles_traveled"])
-    # df_eng["log1p_trip_duration_days"] = np.log1p(df_eng["trip_duration_days"])
-    # df_eng["log1p_total_receipts_amount"] = np.log1p(df_eng["total_receipts_amount"])
-    # df_eng["log1p_miles_per_day"] = np.log1p(df_eng["miles_per_day"])
-    # df_eng["log1p_receipts_per_day"] = np.log1p(df_eng["receipts_per_day"])
-    # df_eng["miles_sq"] = df_eng["miles_traveled"] ** 2
-    # df_eng["receipts_sq"] = df_eng["total_receipts_amount"] ** 2
-    # df_eng["duration_sq"] = df_eng["trip_duration_days"] ** 2
     df_eng["miles_x_duration"] = df_eng["miles_traveled"] * df_eng["trip_duration_days"]
     df_eng["receipts_x_duration"] = (
         df_eng["total_receipts_amount"] * df_eng["trip_duration_days"]
@@ -66,35 +53,15 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df_eng["miles_x_receipts"] = (
         df_eng["miles_traveled"] * df_eng["total_receipts_amount"]
     )
-    receipts_safe = df_eng["total_receipts_amount"].replace(0, 1)
     df_eng["miles_per_receipt"] = df_eng["miles_traveled"] / receipts_safe
-    df_eng["receipts_per_mile"] = (
-        df_eng["total_receipts_amount"] / df_eng["miles_traveled"]
-    )
+    df_eng["receipts_per_mile"] = df_eng["total_receipts_amount"] / miles_safe
 
-    main_features = [
-        # "log1p_miles_per_day",
-        # "log1p_receipts_per_day",
-        "miles_per_day",
-        "receipts_per_day",
-        "miles_per_receipt",
-        "receipts_per_mile",
-    ]
-    for i in range(len(main_features)):
-        for j in range(i + 1, len(main_features)):
-            f1 = main_features[i]
-            f2 = main_features[j]
-            col_name = f"{f1}_x_{f2}"
-            df_eng[col_name] = df_eng[f1] * df_eng[f2]
-
-    # log_features = [
-    #     "log1p_miles_per_day",
-    #     "log1p_receipts_per_day",
-    # ]
-
-    # for f in log_features:
-    #     col_name = f"{f}_x_trip_duration_days"
-    #     df_eng[col_name] = df_eng[f] * df_eng["trip_duration_days"]
+    # Clip extreme values to prevent overflow
+    for col in df_eng.columns:
+        if df_eng[col].dtype in [np.float64, np.int64]:
+            df_eng[col] = np.clip(
+                df_eng[col], np.finfo(np.float32).min, np.finfo(np.float32).max
+            )
 
     return df_eng
 
@@ -103,14 +70,34 @@ class ModelWrapper:
     def __init__(self, model):
         self.model = model
         self.feature_names = None
+        self.scaler = None
 
-    def fit(self, X, y):
+    def fit(self, X, y, eval_set=None):
         self.feature_names = X.columns.tolist()
+        self.scaler = StandardScaler()
+        X_scaled = self.scaler.fit_transform(X)
+
+        if eval_set:
+            X_eval, y_eval = eval_set
+            X_eval_scaled = self.scaler.transform(X_eval)
+            fit_params = {
+                "eval_set": [(X_eval_scaled, y_eval)],
+                "early_stopping_rounds": 50,
+                "verbose": False,
+            }
+        else:
+            fit_params = {}
+
         if hasattr(self.model, "fit"):
             try:
-                self.model.fit(X, y, verbose=False)
+                self.model.fit(X_scaled, y, **fit_params)
             except TypeError:
-                self.model.fit(X, y)
+                # Fallback for models not supporting early stopping
+                if "eval_set" in fit_params:
+                    del fit_params["eval_set"]
+                    del fit_params["early_stopping_rounds"]
+                    del fit_params["verbose"]
+                self.model.fit(X_scaled, y, **fit_params)
         else:
             raise TypeError("Provided model object does not have a fit method")
 
@@ -120,11 +107,44 @@ class ModelWrapper:
             if col not in X:
                 X[col] = 0
         X = X[self.feature_names]
-        return self.model.predict(X)
+        X_scaled = self.scaler.transform(X)
+        return self.model.predict(X_scaled)
+
+
+def _run_train_test_split(model_factory, X, y, target_transform, test_size=0.2):
+    """Helper to run a single train-test split and return scores."""
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42
+    )
+
+    model_instance = model_factory()
+    model = ModelWrapper(model_instance)
+    # Use the test set as the eval set for early stopping
+    model.fit(X_train, y_train, eval_set=(X_test, y_test))
+
+    train_preds = model.predict(X_train)
+    test_preds = model.predict(X_test)
+
+    y_train_raw, y_test_raw = y_train, y_test
+    if target_transform == "log":
+        train_preds = np.expm1(train_preds)
+        y_train_raw = np.expm1(y_train)
+        test_preds = np.expm1(test_preds)
+        y_test_raw = np.expm1(y_test)
+
+    return {
+        "train_mae": mean_absolute_error(y_train_raw, train_preds),
+        "test_mae": mean_absolute_error(y_test_raw, test_preds),
+    }
 
 
 def load_and_train_model(
-    model_factory, features, target_transform="raw", split_by_day=False
+    model_factory,
+    features,
+    target_transform="raw",
+    split_by_day=False,
+    train_test_split=False,
+    use_day_buckets=False,
 ):
     df = pd.read_csv("public_cases.csv")
     df = engineer_features(df)
@@ -137,67 +157,133 @@ def load_and_train_model(
         y = df["expected_output"]
 
     X = df.loc[y.index, features]
+    split_scores = None
 
-    if not split_by_day:
+    if train_test_split:
+        print("Running train-test split...")
+        if not split_by_day and not use_day_buckets:
+            split_scores = _run_train_test_split(model_factory, X, y, target_transform)
+            print(
+                f"  - Single Model -> Train MAE: ${split_scores['train_mae']:.2f}, Test MAE: ${split_scores['test_mae']:.2f}"
+            )
+        else:
+            daily_split_scores = {}
+            if use_day_buckets:
+                df["day_bucket"] = df["trip_duration_days"].apply(_get_day_bucket)
+                X["day_bucket"] = df["day_bucket"]
+                iterator = df["day_bucket"].unique()
+                id_col = "day_bucket"
+                print("  Splitting by day buckets...")
+            else:  # split_by_day
+                iterator = X["trip_duration_days"].unique()
+                id_col = "trip_duration_days"
+                print("  Splitting by individual days...")
+
+            for value in sorted(iterator):
+                mask = X[id_col] == value
+                if mask.sum() < 10:
+                    continue
+
+                X_subset = X[mask].drop(columns=["day_bucket"], errors="ignore")
+                y_subset = y[mask]
+
+                scores = _run_train_test_split(
+                    model_factory, X_subset, y_subset, target_transform
+                )
+                daily_split_scores[value] = scores
+
+                if use_day_buckets:
+                    print(
+                        f"    - Bucket: {str(value).ljust(5)} | Train MAE: ${scores['train_mae']:.2f}, Test MAE: ${scores['test_mae']:.2f}"
+                    )
+                else:
+                    print(
+                        f"    - Duration: {int(value):>2} days | Train MAE: ${scores['train_mae']:<7.2f} | Test MAE: ${scores['test_mae']:<7.2f}"
+                    )
+            split_scores = daily_split_scores
+        print()
+
+    # Train final model(s) on all data
+    if not split_by_day and not use_day_buckets:
         print(f"Fitting single model on '{target_transform}' target...")
         model_instance = model_factory()
         model = ModelWrapper(model_instance)
         model.fit(X, y)
         print("Model fitting complete.")
-        return model, X.columns.tolist()
+        return model, X.columns.tolist(), split_scores
     else:
-        print(f"Fitting daily models on '{target_transform}' target...")
-        daily_models = {}
-        unique_durations = X["trip_duration_days"].unique()
+        if use_day_buckets:
+            df["day_bucket"] = df["trip_duration_days"].apply(_get_day_bucket)
+            X["day_bucket"] = df["day_bucket"]
+            iterator = df["day_bucket"].unique()
+            id_col = "day_bucket"
+            print(f"Fitting models for day buckets on '{target_transform}' target...")
+        else:  # split_by_day
+            iterator = X["trip_duration_days"].unique()
+            id_col = "trip_duration_days"
+            print(f"Fitting daily models on '{target_transform}' target...")
 
-        for duration in sorted(unique_durations):
-            duration_mask = X["trip_duration_days"] == duration
-            if duration_mask.sum() < 10:
+        models = {}
+        for value in sorted(iterator):
+            mask = X[id_col] == value
+            if mask.sum() < 10:
                 print(
-                    f"    Skipping duration {duration}, not enough samples ({duration_mask.sum()})."
+                    f"    Skipping {id_col} {value}, not enough samples ({mask.sum()})."
                 )
                 continue
 
-            print(
-                f"  - Training model for duration: {int(duration)} days ({duration_mask.sum()} samples)"
-            )
+            print(f"  - Training model for {id_col}: {value} ({mask.sum()} samples)")
 
-            X_duration = X[duration_mask]
-            y_duration = y[duration_mask]
+            X_subset = X[mask].drop(columns=["day_bucket"] if use_day_buckets else [])
+            y_subset = y[mask]
 
             model_instance = model_factory()
             model = ModelWrapper(model_instance)
-            model.fit(X_duration, y_duration)
-            daily_models[duration] = model
+            model.fit(X_subset, y_subset)
+            models[value] = model
 
-        print("Daily model fitting complete.")
-        return daily_models, features
+        print("Model fitting complete.")
+        return models, features, split_scores
 
 
 def calculate_reimbursement(
-    model, feature_cols, target_transform="raw", split_by_day=False, **kwargs
+    model,
+    feature_cols,
+    target_transform="raw",
+    split_by_day=False,
+    use_day_buckets=False,
+    **kwargs,
 ):
     X = engineer_features(pd.DataFrame([kwargs]))
 
-    if not split_by_day:
+    if not split_by_day and not use_day_buckets:
         pred = model.predict(X)[0]
     else:
-        daily_models = model
+        models = model
         duration = kwargs["trip_duration_days"]
 
-        if duration in daily_models:
-            duration_model = daily_models[duration]
+        if use_day_buckets:
+            key = _get_day_bucket(duration)
+            msg_type = "bucket"
         else:
-            # Fallback for unseen duration
-            trained_durations = np.array(sorted(daily_models.keys()))
-            closest_duration_idx = (np.abs(trained_durations - duration)).argmin()
-            closest_duration = trained_durations[closest_duration_idx]
-            print(
-                f"Warning: No model for duration {duration}. Using model for closest duration: {int(closest_duration)} days."
-            )
-            duration_model = daily_models[closest_duration]
+            key = duration
+            msg_type = "duration"
 
-        pred = duration_model.predict(X)[0]
+        if key in models:
+            duration_model = models[key]
+        else:
+            # Fallback for unseen duration/bucket
+            trained_keys = np.array(sorted(models.keys()))
+            # This fallback is simpler for buckets; might need refinement
+            closest_key = trained_keys[0]
+            print(
+                f"Warning: No model for {msg_type} {key}. Using model for closest {msg_type}: {closest_key}."
+            )
+            duration_model = models[closest_key]
+
+        pred = duration_model.predict(X.drop(columns=["day_bucket"], errors="ignore"))[
+            0
+        ]
 
     if target_transform == "log":
         reimbursement_per_day = np.expm1(pred)

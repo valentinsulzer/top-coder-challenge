@@ -40,6 +40,16 @@ def main():
         help="Train a separate model for each trip duration.",
     )
     parser.add_argument(
+        "--train-test-split",
+        action="store_true",
+        help="Perform a single train-test split and report scores.",
+    )
+    parser.add_argument(
+        "--day-buckets",
+        action="store_true",
+        help="Train a separate model for buckets of trip durations.",
+    )
+    parser.add_argument(
         "--days", type=int, help="Trip duration in days for prediction."
     )
     parser.add_argument("--miles", type=float, help="Miles traveled for prediction.")
@@ -58,11 +68,13 @@ def main():
             for model_name, config in MODEL_CONFIGS.items():
                 print(f"--- Running evaluation for {config['name']} ---")
                 model_factory = config["model"]
-                model, feature_cols = load_and_train_model(
+                model, feature_cols, split_scores = load_and_train_model(
                     model_factory,
                     FEATURES,
                     target_transform=args.target_transform,
                     split_by_day=args.split_by_day,
+                    train_test_split=args.train_test_split,
+                    use_day_buckets=args.day_buckets,
                 )
                 run_evaluation(
                     model,
@@ -70,14 +82,18 @@ def main():
                     feature_cols,
                     target_transform=args.target_transform,
                     split_by_day=args.split_by_day,
+                    split_scores=split_scores,
+                    use_day_buckets=args.day_buckets,
                 )
                 print(f"--- Finished evaluation for {config['name']} ---\n")
         else:
-            model, feature_cols = load_and_train_model(
+            model, feature_cols, split_scores = load_and_train_model(
                 model_factory,
                 FEATURES,
                 target_transform=args.target_transform,
                 split_by_day=args.split_by_day,
+                train_test_split=args.train_test_split,
+                use_day_buckets=args.day_buckets,
             )
             run_evaluation(
                 model,
@@ -85,6 +101,8 @@ def main():
                 feature_cols,
                 target_transform=args.target_transform,
                 split_by_day=args.split_by_day,
+                split_scores=split_scores,
+                use_day_buckets=args.day_buckets,
             )
     elif args.mode == "predict":
         if not all([args.days, args.miles, args.receipts]):
@@ -92,11 +110,13 @@ def main():
                 "Error: For prediction mode, you must provide --days, --miles, and --receipts."
             )
             sys.exit(1)
-        model, feature_cols = load_and_train_model(
+        model, feature_cols, _ = load_and_train_model(
             model_factory,
             FEATURES,
             target_transform=args.target_transform,
             split_by_day=args.split_by_day,
+            train_test_split=args.train_test_split,
+            use_day_buckets=args.day_buckets,
         )
         reimbursement = calculate_reimbursement(
             model,
@@ -106,6 +126,7 @@ def main():
             total_receipts_amount=args.receipts,
             target_transform=args.target_transform,
             split_by_day=args.split_by_day,
+            use_day_buckets=args.day_buckets,
         )
         print(f"Predicted Reimbursement: ${reimbursement}")
 

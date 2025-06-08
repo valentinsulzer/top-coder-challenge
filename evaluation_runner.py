@@ -9,8 +9,25 @@ from common_utils import engineer_features
 import shap
 
 
+def _get_day_bucket(duration):
+    if duration <= 2:
+        return "1-2"
+    elif duration <= 5:
+        return "3-5"
+    elif duration <= 10:
+        return "6-10"
+    else:
+        return "11+"
+
+
 def run_evaluation(
-    model, model_name, feature_cols, target_transform="raw", split_by_day=False
+    model,
+    model_name,
+    feature_cols,
+    target_transform="raw",
+    split_by_day=False,
+    split_scores=None,
+    use_day_buckets=False,
 ):
     """
     Runs a full evaluation for a given model.
@@ -21,6 +38,8 @@ def run_evaluation(
         feature_cols (list): The list of feature names.
         target_transform (str): The transformation to apply to the model's predictions.
         split_by_day (bool): Whether daily models were trained.
+        split_scores (dict): Optional dictionary of train/test split scores.
+        use_day_buckets (bool): Whether bucketed models were trained.
     """
     print(f"🧾 Black Box Challenge - Reimbursement System Evaluation ({model_name})")
     print("===================================================================")
@@ -34,12 +53,25 @@ def run_evaluation(
     print("⚙️  Engineering features for evaluation set...")
     df_eval = engineer_features(df)
 
-    if split_by_day:
+    if split_scores:
+        print("📈 Train/Test Split Results:")
+        if not split_by_day and not use_day_buckets:
+            print(f"  - Train MAE: ${split_scores['train_mae']:.2f}")
+            print(f"  - Test MAE:  ${split_scores['test_mae']:.2f}")
+        else:
+            print("  Average MAE across models:")
+            avg_train_mae = np.mean([v["train_mae"] for v in split_scores.values()])
+            avg_test_mae = np.mean([v["test_mae"] for v in split_scores.values()])
+            print(f"    - Avg. Train MAE: ${avg_train_mae:.2f}")
+            print(f"    - Avg. Test MAE:  ${avg_test_mae:.2f}")
+        print()
+
+    if split_by_day or use_day_buckets:
         print(
             "\n📊 Model-specific analysis (Feature Importance, SHAP, etc.) is disabled for daily split models.\n"
         )
     else:
-        # Feature Importance Plot (if available)
+        # Feature Importance Plot for tree-based models
         if hasattr(model.model, "feature_importances_"):
             print("📊 Generating feature importance plot...")
             feature_importances = model.model.feature_importances_
@@ -60,6 +92,32 @@ def run_evaluation(
             plt.close()
             print(f"  - Feature importance plot saved to '{plot_path}'")
             print()
+
+        # Coefficient analysis for linear models
+        elif hasattr(model.model, "coef_"):
+            print("📊 Analyzing model coefficients...")
+            coef_df = pd.DataFrame(
+                {"feature": feature_cols, "coefficient": model.model.coef_}
+            )
+
+            # Filter for non-zero coefficients (especially for Lasso)
+            retained_features = coef_df[abs(coef_df["coefficient"]) > 1e-6]
+
+            if not retained_features.empty:
+                print(
+                    f"  - {len(retained_features)} features retained by {model_name}:"
+                )
+                # Sort by absolute coefficient value
+                retained_features = retained_features.reindex(
+                    retained_features.coefficient.abs()
+                    .sort_values(ascending=False)
+                    .index
+                )
+                print(retained_features.to_string(index=False))
+            else:
+                print("  - No features were retained by the model.")
+            print()
+
         else:
             print(f"📊 Feature importance plot not available for {model_name}.")
 
@@ -146,25 +204,33 @@ def run_evaluation(
 
     # Predictions and Results Saving
     print("🔮 Predicting on evaluation set...")
-    if not split_by_day:
+    if not split_by_day and not use_day_buckets:
         preds = model.predict(df_eval)
     else:
-        daily_models = model
+        models = model
         df_eval["preds"] = np.nan
-        trained_durations = np.array(sorted(daily_models.keys()))
 
-        for duration in df_eval["trip_duration_days"].unique():
-            duration_mask = df_eval["trip_duration_days"] == duration
-            X_duration = df_eval[duration_mask]
+        if use_day_buckets:
+            df_eval["day_bucket"] = df_eval["trip_duration_days"].apply(_get_day_bucket)
+            iterator = df_eval["day_bucket"].unique()
+            id_col = "day_bucket"
+        else:  # split_by_day
+            iterator = df_eval["trip_duration_days"].unique()
+            id_col = "trip_duration_days"
 
-            if duration in daily_models:
-                duration_model = daily_models[duration]
+        trained_keys = np.array(sorted(models.keys()))
+
+        for value in iterator:
+            mask = df_eval[id_col] == value
+            X_subset = df_eval[mask]
+
+            if value in models:
+                current_model = models[value]
             else:
-                closest_duration_idx = (np.abs(trained_durations - duration)).argmin()
-                closest_duration = trained_durations[closest_duration_idx]
-                duration_model = daily_models[closest_duration]
+                closest_key = trained_keys[0]
+                current_model = models[closest_key]
 
-            df_eval.loc[duration_mask, "preds"] = duration_model.predict(X_duration)
+            df_eval.loc[mask, "preds"] = current_model.predict(X_subset)
 
         preds = df_eval["preds"].values
 
