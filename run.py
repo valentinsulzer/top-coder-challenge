@@ -35,6 +35,11 @@ def main():
         help="Transformation to apply to the target variable before training.",
     )
     parser.add_argument(
+        "--split-by-day",
+        action="store_true",
+        help="Train a separate model for each trip duration.",
+    )
+    parser.add_argument(
         "--days", type=int, help="Trip duration in days for prediction."
     )
     parser.add_argument("--miles", type=float, help="Miles traveled for prediction.")
@@ -45,34 +50,41 @@ def main():
     model_key = args.model
     if model_key != "all":
         model_config = MODEL_CONFIGS[model_key]
-        model_instance = model_config["model"]()
+        model_factory = model_config["model"]
         model_name = model_config["name"]
 
     if args.mode == "evaluate":
         if model_key == "all":
             for model_name, config in MODEL_CONFIGS.items():
                 print(f"--- Running evaluation for {config['name']} ---")
-                model_instance = config["model"]()
+                model_factory = config["model"]
                 model, feature_cols = load_and_train_model(
-                    model_instance, FEATURES, target_transform=args.target_transform
+                    model_factory,
+                    FEATURES,
+                    target_transform=args.target_transform,
+                    split_by_day=args.split_by_day,
                 )
                 run_evaluation(
                     model,
                     config["name"],
                     feature_cols,
                     target_transform=args.target_transform,
+                    split_by_day=args.split_by_day,
                 )
                 print(f"--- Finished evaluation for {config['name']} ---\n")
         else:
-            model_instance = MODEL_CONFIGS[model_key]["model"]()
             model, feature_cols = load_and_train_model(
-                model_instance, FEATURES, target_transform=args.target_transform
+                model_factory,
+                FEATURES,
+                target_transform=args.target_transform,
+                split_by_day=args.split_by_day,
             )
             run_evaluation(
                 model,
                 MODEL_CONFIGS[model_key]["name"],
                 feature_cols,
                 target_transform=args.target_transform,
+                split_by_day=args.split_by_day,
             )
     elif args.mode == "predict":
         if not all([args.days, args.miles, args.receipts]):
@@ -81,7 +93,10 @@ def main():
             )
             sys.exit(1)
         model, feature_cols = load_and_train_model(
-            model_instance, FEATURES, target_transform=args.target_transform
+            model_factory,
+            FEATURES,
+            target_transform=args.target_transform,
+            split_by_day=args.split_by_day,
         )
         reimbursement = calculate_reimbursement(
             model,
@@ -90,6 +105,7 @@ def main():
             miles_traveled=args.miles,
             total_receipts_amount=args.receipts,
             target_transform=args.target_transform,
+            split_by_day=args.split_by_day,
         )
         print(f"Predicted Reimbursement: ${reimbursement}")
 

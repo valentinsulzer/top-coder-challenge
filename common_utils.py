@@ -123,7 +123,9 @@ class ModelWrapper:
         return self.model.predict(X)
 
 
-def load_and_train_model(model_instance, features, target_transform="raw"):
+def load_and_train_model(
+    model_factory, features, target_transform="raw", split_by_day=False
+):
     df = pd.read_csv("public_cases.csv")
     df = engineer_features(df)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -134,23 +136,68 @@ def load_and_train_model(model_instance, features, target_transform="raw"):
     else:
         y = df["expected_output"]
 
-    X = df[features]
+    X = df.loc[y.index, features]
 
-    print(f"Fitting model on '{target_transform}' target...")
-    model = ModelWrapper(model_instance)
-    model.fit(X, y)
-    print("Model fitting complete.")
+    if not split_by_day:
+        print(f"Fitting single model on '{target_transform}' target...")
+        model_instance = model_factory()
+        model = ModelWrapper(model_instance)
+        model.fit(X, y)
+        print("Model fitting complete.")
+        return model, X.columns.tolist()
+    else:
+        print(f"Fitting daily models on '{target_transform}' target...")
+        daily_models = {}
+        unique_durations = X["trip_duration_days"].unique()
 
-    return model, X.columns.tolist()
+        for duration in sorted(unique_durations):
+            duration_mask = X["trip_duration_days"] == duration
+            if duration_mask.sum() < 10:
+                print(
+                    f"    Skipping duration {duration}, not enough samples ({duration_mask.sum()})."
+                )
+                continue
+
+            print(
+                f"  - Training model for duration: {int(duration)} days ({duration_mask.sum()} samples)"
+            )
+
+            X_duration = X[duration_mask]
+            y_duration = y[duration_mask]
+
+            model_instance = model_factory()
+            model = ModelWrapper(model_instance)
+            model.fit(X_duration, y_duration)
+            daily_models[duration] = model
+
+        print("Daily model fitting complete.")
+        return daily_models, features
 
 
-def calculate_reimbursement(model, feature_cols, target_transform="raw", **kwargs):
+def calculate_reimbursement(
+    model, feature_cols, target_transform="raw", split_by_day=False, **kwargs
+):
     X = engineer_features(pd.DataFrame([kwargs]))
-    for col in feature_cols:
-        if col not in X:
-            X[col] = 0
-    X = X[feature_cols]
-    pred = model.predict(X)[0]
+
+    if not split_by_day:
+        pred = model.predict(X)[0]
+    else:
+        daily_models = model
+        duration = kwargs["trip_duration_days"]
+
+        if duration in daily_models:
+            duration_model = daily_models[duration]
+        else:
+            # Fallback for unseen duration
+            trained_durations = np.array(sorted(daily_models.keys()))
+            closest_duration_idx = (np.abs(trained_durations - duration)).argmin()
+            closest_duration = trained_durations[closest_duration_idx]
+            print(
+                f"Warning: No model for duration {duration}. Using model for closest duration: {int(closest_duration)} days."
+            )
+            duration_model = daily_models[closest_duration]
+
+        pred = duration_model.predict(X)[0]
 
     if target_transform == "log":
         reimbursement_per_day = np.expm1(pred)

@@ -9,7 +9,9 @@ from common_utils import engineer_features
 import shap
 
 
-def run_evaluation(model, model_name, feature_cols, target_transform="raw"):
+def run_evaluation(
+    model, model_name, feature_cols, target_transform="raw", split_by_day=False
+):
     """
     Runs a full evaluation for a given model.
 
@@ -18,6 +20,7 @@ def run_evaluation(model, model_name, feature_cols, target_transform="raw"):
         model_name (str): The name of the model for titles and filenames.
         feature_cols (list): The list of feature names.
         target_transform (str): The transformation to apply to the model's predictions.
+        split_by_day (bool): Whether daily models were trained.
     """
     print(f"🧾 Black Box Challenge - Reimbursement System Evaluation ({model_name})")
     print("===================================================================")
@@ -27,112 +30,143 @@ def run_evaluation(model, model_name, feature_cols, target_transform="raw"):
     output_dir = f"visualizations_{output_suffix}"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Feature Importance Plot (if available)
-    if hasattr(model.model, "feature_importances_"):
-        print("📊 Generating feature importance plot...")
-        feature_importances = model.model.feature_importances_
-        importance_df = (
-            pd.DataFrame({"feature": feature_cols, "importance": feature_importances})
-            .sort_values("importance", ascending=False)
-            .head(20)
-        )
-
-        plt.figure(figsize=(12, 10))
-        sns.barplot(x="importance", y="feature", data=importance_df)
-        plt.title(f"Top 20 Feature Importances ({model_name})")
-        plt.tight_layout()
-        plot_path = os.path.join(output_dir, "feature_importance.png")
-        plt.savefig(plot_path)
-        plt.close()
-        print(f"  - Feature importance plot saved to '{plot_path}'")
-        print()
-    else:
-        print(f"📊 Feature importance plot not available for {model_name}.")
-
-    # Predictions and Results Saving
     df = pd.read_csv("public_cases.csv")
     print("⚙️  Engineering features for evaluation set...")
     df_eval = engineer_features(df)
 
-    # SHAP Analysis for tree-based models
-    if hasattr(model.model, "predict") and hasattr(model.model, "feature_importances_"):
-        print("📊 Generating SHAP summary plot...")
-        # Using a subset of data for performance reasons
-        X_sampled = df_eval[feature_cols].sample(100, random_state=42)
-        explainer = shap.TreeExplainer(model.model)
-        shap_values = explainer.shap_values(X_sampled)
+    if split_by_day:
+        print(
+            "\n📊 Model-specific analysis (Feature Importance, SHAP, etc.) is disabled for daily split models.\n"
+        )
+    else:
+        # Feature Importance Plot (if available)
+        if hasattr(model.model, "feature_importances_"):
+            print("📊 Generating feature importance plot...")
+            feature_importances = model.model.feature_importances_
+            importance_df = (
+                pd.DataFrame(
+                    {"feature": feature_cols, "importance": feature_importances}
+                )
+                .sort_values("importance", ascending=False)
+                .head(20)
+            )
 
-        plt.figure()
-        shap.summary_plot(shap_values, X_sampled, plot_type="bar", show=False)
-        plt.title(f"SHAP Feature Importance ({model_name})")
-        plt.tight_layout()
-        shap_plot_path = os.path.join(output_dir, "shap_summary.png")
-        plt.savefig(shap_plot_path)
-        plt.close()
-        print(f"  - SHAP summary plot saved to '{shap_plot_path}'")
-        print()
-
-    if "xgboost" in model_name.lower():
-        print("🔍 Analyzing XGBoost model structure...")
-        booster = model.model.get_booster()
-
-        model_dump = booster.get_dump(dump_format="text")
-
-        split_pattern = re.compile(r"\[(.*?)<([^\]]+)\]")
-
-        splits = []
-        for tree in model_dump:
-            for line in tree.split("\n"):
-                match = split_pattern.search(line)
-                if match:
-                    feature_name = match.group(1)
-                    threshold = float(match.group(2))
-
-                    # Simplified extraction, gain is not easily available in text dump with feature names
-                    splits.append(
-                        {
-                            "feature": feature_name,
-                            "threshold": threshold,
-                        }
-                    )
-
-        if splits:
-            splits_df = pd.DataFrame(splits)
-
-            # Show top 10 features by split frequency
-            print("\n📊 Top 10 Features by Split Frequency:")
-            feature_split_counts = splits_df["feature"].value_counts().head(10)
-            print(feature_split_counts.to_string())
-
-            # Show most common thresholds for top features
-            print("\n\n📋 Common Thresholds for Top Features:")
-            for feature in feature_split_counts.index:
-                print(f"\n  - Feature: {feature}")
-                thresholds = splits_df[splits_df["feature"] == feature]["threshold"]
-                if len(thresholds.unique()) > 1:
-                    try:
-                        quantiles = pd.qcut(
-                            thresholds,
-                            q=min(5, len(thresholds.unique()) - 1),
-                            duplicates="drop",
-                        )
-                        print("    Common threshold ranges (quantiles):")
-                        print(
-                            quantiles.value_counts(normalize=True)
-                            .sort_index()
-                            .to_string()
-                        )
-                    except ValueError:
-                        print("    Could not determine interesting threshold ranges.")
-                else:
-                    print(f"    Single threshold: {thresholds.iloc[0]}")
+            plt.figure(figsize=(12, 10))
+            sns.barplot(x="importance", y="feature", data=importance_df)
+            plt.title(f"Top 20 Feature Importances ({model_name})")
+            plt.tight_layout()
+            plot_path = os.path.join(output_dir, "feature_importance.png")
+            plt.savefig(plot_path)
+            plt.close()
+            print(f"  - Feature importance plot saved to '{plot_path}'")
             print()
         else:
-            print("  - No splits found in the model dump.")
-        print()
+            print(f"📊 Feature importance plot not available for {model_name}.")
 
+        # SHAP Analysis for tree-based models
+        if hasattr(model.model, "predict") and hasattr(
+            model.model, "feature_importances_"
+        ):
+            print("📊 Generating SHAP summary plot...")
+            # Using a subset of data for performance reasons
+            X_sampled = df_eval[feature_cols].sample(100, random_state=42)
+            explainer = shap.TreeExplainer(model.model)
+            shap_values = explainer.shap_values(X_sampled)
+
+            plt.figure()
+            shap.summary_plot(shap_values, X_sampled, plot_type="bar", show=False)
+            plt.title(f"SHAP Feature Importance ({model_name})")
+            plt.tight_layout()
+            shap_plot_path = os.path.join(output_dir, "shap_summary.png")
+            plt.savefig(shap_plot_path)
+            plt.close()
+            print(f"  - SHAP summary plot saved to '{shap_plot_path}'")
+            print()
+
+        if "xgboost" in model_name.lower():
+            print("🔍 Analyzing XGBoost model structure...")
+            booster = model.model.get_booster()
+
+            model_dump = booster.get_dump(dump_format="text")
+
+            split_pattern = re.compile(r"\[(.*?)<([^\]]+)\]")
+
+            splits = []
+            for tree in model_dump:
+                for line in tree.split("\n"):
+                    match = split_pattern.search(line)
+                    if match:
+                        feature_name = match.group(1)
+                        threshold = float(match.group(2))
+
+                        # Simplified extraction, gain is not easily available in text dump with feature names
+                        splits.append(
+                            {
+                                "feature": feature_name,
+                                "threshold": threshold,
+                            }
+                        )
+
+            if splits:
+                splits_df = pd.DataFrame(splits)
+
+                # Show top 10 features by split frequency
+                print("\n📊 Top 10 Features by Split Frequency:")
+                feature_split_counts = splits_df["feature"].value_counts().head(10)
+                print(feature_split_counts.to_string())
+
+                # Show most common thresholds for top features
+                print("\n\n📋 Common Thresholds for Top Features:")
+                for feature in feature_split_counts.index:
+                    print(f"\n  - Feature: {feature}")
+                    thresholds = splits_df[splits_df["feature"] == feature]["threshold"]
+                    if len(thresholds.unique()) > 1:
+                        try:
+                            quantiles = pd.qcut(
+                                thresholds,
+                                q=min(5, len(thresholds.unique()) - 1),
+                                duplicates="drop",
+                            )
+                            print("    Common threshold ranges (quantiles):")
+                            print(
+                                quantiles.value_counts(normalize=True)
+                                .sort_index()
+                                .to_string()
+                            )
+                        except ValueError:
+                            print(
+                                "    Could not determine interesting threshold ranges."
+                            )
+                    else:
+                        print(f"    Single threshold: {thresholds.iloc[0]}")
+                print()
+            else:
+                print("  - No splits found in the model dump.")
+            print()
+
+    # Predictions and Results Saving
     print("🔮 Predicting on evaluation set...")
-    preds = model.predict(df_eval)
+    if not split_by_day:
+        preds = model.predict(df_eval)
+    else:
+        daily_models = model
+        df_eval["preds"] = np.nan
+        trained_durations = np.array(sorted(daily_models.keys()))
+
+        for duration in df_eval["trip_duration_days"].unique():
+            duration_mask = df_eval["trip_duration_days"] == duration
+            X_duration = df_eval[duration_mask]
+
+            if duration in daily_models:
+                duration_model = daily_models[duration]
+            else:
+                closest_duration_idx = (np.abs(trained_durations - duration)).argmin()
+                closest_duration = trained_durations[closest_duration_idx]
+                duration_model = daily_models[closest_duration]
+
+            df_eval.loc[duration_mask, "preds"] = duration_model.predict(X_duration)
+
+        preds = df_eval["preds"].values
 
     if target_transform == "log":
         reimbursement_per_day = np.expm1(preds)
